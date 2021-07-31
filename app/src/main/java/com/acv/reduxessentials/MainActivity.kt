@@ -14,6 +14,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.text.isDigitsOnly
 import com.acv.reduxessentials.ui.theme.ReduxEssentialsTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
 
@@ -32,21 +33,33 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+object Store {
+    var atm = MutableStateFlow(ATM(0))
+
+    fun deposit(amount: String) {
+        atm.value = atm.value.copy(balance = atm.value.balance + amount.validate())
+    }
+
+    fun withdraw(amount: String) {
+        atm.value = atm.value.copy(balance = atm.value.balance - amount.validate())
+    }
+}
+
 data class ATM(
     val balance: Int,
 )
 
 @Composable
 private fun App() {
-    var atm by remember { mutableStateOf(ATM(0)) }
+    val atm by Store.atm.collectAsState()
     var amount by remember { mutableStateOf("") }
 
     val deposit = {
-        atm = atm.copy(balance = atm.balance + amount.validate())
+        Store.deposit(amount)
         amount = ""
     }
     val withdraw = {
-        atm = atm.copy(balance = atm.balance - amount.validate())
+        Store.withdraw(amount)
         amount = ""
     }
 
