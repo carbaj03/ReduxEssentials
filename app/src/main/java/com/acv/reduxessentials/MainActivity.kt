@@ -14,13 +14,14 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.text.isDigitsOnly
 import androidx.lifecycle.lifecycleScope
+import com.acv.reduxessentials.Action.*
 import com.acv.reduxessentials.ui.theme.ReduxEssentialsTheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
-import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
     private val store = Store(
@@ -54,12 +55,13 @@ data class AppState(
 )
 
 sealed interface Action {
+    object Retry : Action
     data class Deposit(val amount: String) : Action
     data class Withdrawal(val amount: String) : Action
     object Validating : Action
-    object DepositSucceed : Action
+    data class DepositSucceed(val amount: Int) : Action
     object DepositError : Action
-    object WithdrawalSucceed : Action
+    data class WithdrawalSucceed(val amount: Int) : Action
     object WithdrawalError : Action
 }
 
@@ -70,24 +72,48 @@ class Store(
     var state = MutableStateFlow(initialState)
 
     fun dispatch(action: Action) {
-        launch { state.value = state.value.reduce(action) }
+        launch(Dispatchers.IO) {
+            state.value.sideEffects(action)
+            state.value = state.value.reduce(action)
+        }
     }
 
-    private suspend fun AppState.reduce(action: Action): AppState =
+    private suspend fun AppState.sideEffects(action: Action) {
         when (action) {
-            is Action.Deposit -> {
-                if (validateTransaction()) state.value.copy(state.value.atm.copy(state.value.atm.balance + action.amount.validate()))
-                else this
+            is Deposit -> {
+                dispatch(Validating)
+                validateTransaction(action.amount)?.let { dispatch(DepositSucceed(it)) }
+                    ?: dispatch(DepositError)
             }
-            is Action.Withdrawal -> {
-                if (validateTransaction()) state.value.copy(state.value.atm.copy(state.value.atm.balance - action.amount.validate()))
-                else this
+            is Withdrawal -> {
+                dispatch(Validating)
+                validateTransaction(action.amount)?.let { dispatch(WithdrawalSucceed(it)) }
+                    ?: dispatch(WithdrawalError)
             }
-            is Action.Validating -> state.value.copy(loading = true)
-            is Action.DepositError -> state.value.copy(error = true, loading = false)
-            is Action.DepositSucceed -> state.value.copy(error = false, loading = false)
-            is Action.WithdrawalError -> state.value.copy(error = true, loading = false)
-            is Action.WithdrawalSucceed -> state.value.copy(error = false, loading = false)
+        }
+    }
+
+    private fun AppState.reduce(action: Action): AppState =
+        when (action) {
+            is Deposit -> this
+            is Withdrawal -> this
+            is Validating -> state.value.copy(loading = true)
+            is DepositError -> state.value.copy(error = true, loading = false)
+            is DepositSucceed -> state.value.copy(
+                error = false,
+                loading = false,
+                atm = state.value.atm.copy(balance = state.value.atm.balance + action.amount)
+            )
+            is WithdrawalError -> state.value.copy(error = true, loading = false)
+            is WithdrawalSucceed -> state.value.copy(
+                error = false,
+                loading = false,
+                atm = state.value.atm.copy(balance = state.value.atm.balance - action.amount)
+            )
+            Retry -> state.value.copy(
+                error = false,
+                loading = false,
+            )
         }
 }
 
@@ -95,9 +121,9 @@ data class ATM(
     val balance: Int,
 )
 
-suspend fun validateTransaction(): Boolean {
-    delay(8000)
-    return Random.nextBoolean()
+suspend fun validateTransaction(amount: String): Int? {
+    delay(2000)
+    return amount.validate()
 }
 
 @Composable
@@ -106,11 +132,11 @@ private fun App(store: Store) {
     var amount by remember { mutableStateOf("") }
 
     val deposit = {
-        store.dispatch(Action.Deposit(amount))
+        store.dispatch(Deposit(amount))
         amount = ""
     }
     val withdraw = {
-        store.dispatch(Action.Withdrawal(amount))
+        store.dispatch(Withdrawal(amount))
         amount = ""
     }
 
@@ -120,7 +146,12 @@ private fun App(store: Store) {
     ) {
         when {
             state.error -> {
-                Text("Error")
+                Column {
+                    Text("Error")
+                    Button(onClick = { store.dispatch(Retry) }) {
+                        Text(text = "Retry")
+                    }
+                }
             }
             state.loading -> {
                 Text(text = "Loading...")
@@ -146,11 +177,10 @@ private fun App(store: Store) {
     }
 }
 
-private fun String.validate(): Int =
+private fun String.validate(): Int? =
     when {
-        isDigitsOnly() -> toIntOrNull() ?: 0
-        isBlank() -> 0
-        else -> 0
+        isDigitsOnly() -> toIntOrNull()
+        else -> null
     }
 
 @Composable
