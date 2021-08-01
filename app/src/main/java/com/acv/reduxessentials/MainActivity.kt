@@ -1,6 +1,7 @@
 package com.acv.reduxessentials
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -30,7 +31,8 @@ class MainActivity : ComponentActivity() {
             error = false,
             loading = false
         ),
-        coroutineContext = lifecycleScope.coroutineContext
+        coroutineContext = lifecycleScope.coroutineContext,
+        sideEffects = listOf(ASYNC, TRACKER)
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,31 +67,20 @@ sealed interface Action {
     object WithdrawalError : Action
 }
 
+
+typealias SideEffect = suspend (Action, Store) -> Unit
+
 class Store(
     initialState: AppState,
+    private val sideEffects: List<SideEffect>,
     override val coroutineContext: CoroutineContext
 ) : CoroutineScope {
     var state = MutableStateFlow(initialState)
 
     fun dispatch(action: Action) {
         launch(Dispatchers.IO) {
-            state.value.sideEffects(action)
             state.value = state.value.reduce(action)
-        }
-    }
-
-    private suspend fun AppState.sideEffects(action: Action) {
-        when (action) {
-            is Deposit -> {
-                dispatch(Validating)
-                validateTransaction(action.amount)?.let { dispatch(DepositSucceed(it)) }
-                    ?: dispatch(DepositError)
-            }
-            is Withdrawal -> {
-                dispatch(Validating)
-                validateTransaction(action.amount)?.let { dispatch(WithdrawalSucceed(it)) }
-                    ?: dispatch(WithdrawalError)
-            }
+            sideEffects.run { forEach { it(action, this@Store) } }
         }
     }
 
@@ -117,12 +108,34 @@ class Store(
         }
 }
 
+val ASYNC: SideEffect = { action, store ->
+    when (action) {
+        is Deposit -> {
+            store.dispatch(Validating)
+            validateTransaction(action.amount)?.let { store.dispatch(DepositSucceed(it)) }
+                ?: store.dispatch(DepositError)
+        }
+        is Withdrawal -> {
+            store.dispatch(Validating)
+            validateTransaction(action.amount)?.let { store.dispatch(WithdrawalSucceed(it)) }
+                ?: store.dispatch(WithdrawalError)
+        }
+    }
+}
+
+val TRACKER: SideEffect = { action, store ->
+    when (action) {
+        is Deposit -> Log.e("deposit", store.state.value.toString())
+        is Withdrawal -> Log.e("deposit", store.state.value.toString())
+    }
+}
+
 data class ATM(
     val balance: Int,
 )
 
 suspend fun validateTransaction(amount: String): Int? {
-    delay(2000)
+    delay(1000)
     return amount.validate()
 }
 
