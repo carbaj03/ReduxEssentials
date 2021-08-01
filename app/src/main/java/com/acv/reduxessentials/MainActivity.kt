@@ -38,20 +38,25 @@ data class AppState(
     val atm: ATM
 )
 
+sealed interface Action {
+    data class Deposit(val amount: String) : Action
+    data class Withdrawal(val amount: String) : Action
+}
+
 class Store(
-    private val initialState: AppState
+    initialState: AppState
 ) {
     var state = MutableStateFlow(initialState)
 
-    fun deposit(amount: String) {
-        state.value =
-            state.value.copy(state.value.atm.copy(state.value.atm.balance + amount.validate()))
+    fun dispatch(action: Action) {
+        state.value = state.value.reduce(action)
     }
 
-    fun withdraw(amount: String) {
-        state.value =
-            state.value.copy(state.value.atm.copy(state.value.atm.balance - amount.validate()))
-    }
+    private fun AppState.reduce(action: Action): AppState =
+        when (action) {
+            is Action.Deposit -> state.value.copy(state.value.atm.copy(state.value.atm.balance + action.amount.validate()))
+            is Action.Withdrawal -> state.value.copy(state.value.atm.copy(state.value.atm.balance - action.amount.validate()))
+        }
 }
 
 data class ATM(
@@ -64,11 +69,11 @@ private fun App(store: Store) {
     var amount by remember { mutableStateOf("") }
 
     val deposit = {
-        store.deposit(amount)
+        store.dispatch(Action.Deposit(amount))
         amount = ""
     }
     val withdraw = {
-        store.withdraw(amount)
+        store.dispatch(Action.Withdrawal(amount))
         amount = ""
     }
 
