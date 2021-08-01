@@ -18,27 +18,43 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.text.isDigitsOnly
-import androidx.lifecycle.lifecycleScope
 import com.acv.reduxessentials.Action.*
 import com.acv.reduxessentials.ui.theme.ReduxEssentialsTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.StateFlow
 import java.util.*
-import kotlin.coroutines.CoroutineContext
+
+
+fun createStore(
+    initialState: AppState,
+    reducers: List<Reducer>,
+    sideEffects: List<SideEffect>,
+): Store {
+    val currentState = MutableStateFlow(initialState)
+
+    val dispatcher: Dispatcher = { action ->
+        currentState.value = reducers.fold(currentState.value) { s, reducer -> reducer(action, s) }
+        sideEffects.run { forEach { it(action, this@Store) } }
+        action
+    }
+
+    return object : Store() {
+        override var dispatch: Dispatcher = dispatcher
+        override val state: StateFlow<AppState> = currentState
+    }
+}
 
 class MainActivity : ComponentActivity() {
-    private val store = Store(
+    private val store = createStore(
         initialState = AppState(
             atm = ATM(0),
             error = false,
             loading = false,
             transactions = emptyList()
         ),
-        coroutineContext = lifecycleScope.coroutineContext,
-        sideEffects = listOf(ASYNC, TRACKER)
+        sideEffects = listOf(ASYNC, TRACKER),
+        reducers = listOf(AtmReducer, TransactionReducer)
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,53 +105,19 @@ sealed interface Action {
 
 typealias SideEffect = suspend (Action, Store) -> Unit
 
-class Store(
-    initialState: AppState,
-    private val sideEffects: List<SideEffect>,
-    override val coroutineContext: CoroutineContext
-) : CoroutineScope {
-    var state = MutableStateFlow(initialState)
+abstract class Store(
 
-    fun dispatch(action: Action) {
-        launch(Dispatchers.IO) {
-            state.value = state.value.reduce(action)
-            sideEffects.run { forEach { it(action, this@Store) } }
-        }
-    }
+) {
+    abstract val state: StateFlow<AppState>
 
-    private fun AppState.reduce(action: Action): AppState =
-        when (action) {
-            is Deposit -> this
-            is Withdrawal -> this
-            is Validating -> state.value.copy(loading = true)
-            is DepositError -> state.value.copy(error = true, loading = false)
-            is DepositSucceed -> state.value.copy(
-                error = false,
-                loading = false,
-                atm = state.value.atm.copy(balance = state.value.atm.balance + action.amount),
-                transactions = state.value.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Income, ""))
-            )
-            is WithdrawalError -> state.value.copy(error = true, loading = false)
-            is WithdrawalSucceed -> state.value.copy(
-                error = false,
-                loading = false,
-                atm = state.value.atm.copy(balance = state.value.atm.balance - action.amount),
-                transactions = state.value.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Expense, "")),
-            )
-            is Retry -> state.value.copy(
-                error = false,
-                loading = false,
-            )
-            is RemoveTransaction -> state.value.copy(
-                atm =  state.value.atm.copy(balance = state.value.transactions.firstOrNull { it.id == action.id }?.let {
-                  when(it.type){
-                      Type.Expense ->  state.value.atm.balance + it.amount
-                      Type.Income ->  state.value.atm.balance - it.amount
-                  }
-                } ?: state.value.atm.balance),
-                transactions = state.value.transactions.filterNot { it.id == action.id },
-            )
-        }
+    abstract var dispatch: Dispatcher
+
+//    fun dispatch(action: Action) {
+//        launch(Dispatchers.IO) {
+//            state.value = reducers.fold(state.value) { s, reducer -> reducer(action, s) }
+//            sideEffects.run { forEach { it(action, this@Store) } }
+//        }
+//    }
 }
 
 val ASYNC: SideEffect = { action, store ->
@@ -150,6 +132,52 @@ val ASYNC: SideEffect = { action, store ->
             validateTransaction(action.amount)?.let { store.dispatch(WithdrawalSucceed(it)) }
                 ?: store.dispatch(WithdrawalError)
         }
+    }
+}
+typealias Dispatcher = (Action) -> Action
+
+typealias Reducer = (Action, AppState) -> AppState
+
+val TransactionReducer: Reducer = { action, state ->
+    when (action) {
+        is RemoveTransaction -> state.copy(
+            atm = state.atm.copy(
+                balance = state.transactions.firstOrNull { it.id == action.id }?.let {
+                    when (it.type) {
+                        Type.Expense -> state.atm.balance + it.amount
+                        Type.Income -> state.atm.balance - it.amount
+                    }
+                } ?: state.atm.balance),
+            transactions = state.transactions.filterNot { it.id == action.id },
+        )
+        else -> state
+    }
+}
+
+val AtmReducer: Reducer = { action, state ->
+    when (action) {
+        is Deposit -> state
+        is Withdrawal -> state
+        is Validating -> state.copy(loading = true)
+        is DepositError -> state.copy(error = true, loading = false)
+        is DepositSucceed -> state.copy(
+            error = false,
+            loading = false,
+            atm = state.atm.copy(balance = state.atm.balance + action.amount),
+            transactions = state.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Income, ""))
+        )
+        is WithdrawalError -> state.copy(error = true, loading = false)
+        is WithdrawalSucceed -> state.copy(
+            error = false,
+            loading = false,
+            atm = state.atm.copy(balance = state.atm.balance - action.amount),
+            transactions = state.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Expense, "")),
+        )
+        is Retry -> state.copy(
+            error = false,
+            loading = false,
+        )
+        else -> state
     }
 }
 
@@ -178,6 +206,7 @@ private fun App(store: Store) {
         store.dispatch(Deposit(amount))
         amount = ""
     }
+
     val withdraw = {
         store.dispatch(Withdrawal(amount))
         amount = ""
