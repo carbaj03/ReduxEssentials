@@ -5,11 +5,15 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color.Companion.Green
+import androidx.compose.ui.graphics.Color.Companion.Red
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -22,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.util.*
 import kotlin.coroutines.CoroutineContext
 
 class MainActivity : ComponentActivity() {
@@ -29,7 +34,8 @@ class MainActivity : ComponentActivity() {
         initialState = AppState(
             atm = ATM(0),
             error = false,
-            loading = false
+            loading = false,
+            transactions = emptyList()
         ),
         coroutineContext = lifecycleScope.coroutineContext,
         sideEffects = listOf(ASYNC, TRACKER)
@@ -52,9 +58,22 @@ class MainActivity : ComponentActivity() {
 
 data class AppState(
     val atm: ATM,
+    val transactions: List<Transaction>,
     val error: Boolean,
     val loading: Boolean,
 )
+
+data class Transaction(
+    val id: Long,
+    val amount: Int,
+    val type: Type,
+    val description: String
+)
+
+sealed interface Type {
+    object Expense : Type
+    object Income : Type
+}
 
 sealed interface Action {
     object Retry : Action
@@ -65,8 +84,8 @@ sealed interface Action {
     object DepositError : Action
     data class WithdrawalSucceed(val amount: Int) : Action
     object WithdrawalError : Action
+    data class RemoveTransaction(val id: Long) : Action
 }
-
 
 typealias SideEffect = suspend (Action, Store) -> Unit
 
@@ -93,17 +112,28 @@ class Store(
             is DepositSucceed -> state.value.copy(
                 error = false,
                 loading = false,
-                atm = state.value.atm.copy(balance = state.value.atm.balance + action.amount)
+                atm = state.value.atm.copy(balance = state.value.atm.balance + action.amount),
+                transactions = state.value.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Income, ""))
             )
             is WithdrawalError -> state.value.copy(error = true, loading = false)
             is WithdrawalSucceed -> state.value.copy(
                 error = false,
                 loading = false,
-                atm = state.value.atm.copy(balance = state.value.atm.balance - action.amount)
+                atm = state.value.atm.copy(balance = state.value.atm.balance - action.amount),
+                transactions = state.value.transactions.plus(Transaction(UUID.randomUUID().leastSignificantBits, action.amount, Type.Expense, "")),
             )
-            Retry -> state.value.copy(
+            is Retry -> state.value.copy(
                 error = false,
                 loading = false,
+            )
+            is RemoveTransaction -> state.value.copy(
+                atm =  state.value.atm.copy(balance = state.value.transactions.firstOrNull { it.id == action.id }?.let {
+                  when(it.type){
+                      Type.Expense ->  state.value.atm.balance + it.amount
+                      Type.Income ->  state.value.atm.balance - it.amount
+                  }
+                } ?: state.value.atm.balance),
+                transactions = state.value.transactions.filterNot { it.id == action.id },
             )
         }
 }
@@ -153,6 +183,10 @@ private fun App(store: Store) {
         amount = ""
     }
 
+    val remove = { id: Long ->
+        store.dispatch(RemoveTransaction(id))
+    }
+
     Column(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -183,6 +217,23 @@ private fun App(store: Store) {
                     }
                     Button(modifier = Modifier.padding(8.dp), onClick = withdraw) {
                         Text(text = "Withdraw")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                LazyColumn {
+                    items(state.transactions) {
+                        Text(
+                            text = it.amount.toString(),
+                            color = when (it.type) {
+                                is Type.Income -> Green
+                                is Type.Expense -> Red
+                            }
+                        )
+                        Button(onClick = { remove(it.id) }) {
+                            Text(text = "Remove")
+                        }
                     }
                 }
             }
