@@ -17,6 +17,7 @@ import com.acv.reduxessentials.ui.theme.ReduxEssentialsTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+    private val store = Store(AppState(ATM(0)))
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,22 +27,30 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colors.background
                 ) {
-                    App()
+                    App(store)
                 }
             }
         }
     }
 }
 
-object Store {
-    var atm = MutableStateFlow(ATM(0))
+data class AppState(
+    val atm: ATM
+)
+
+class Store(
+    private val initialState: AppState
+) {
+    var state = MutableStateFlow(initialState)
 
     fun deposit(amount: String) {
-        atm.value = atm.value.copy(balance = atm.value.balance + amount.validate())
+        state.value =
+            state.value.copy(state.value.atm.copy(state.value.atm.balance + amount.validate()))
     }
 
     fun withdraw(amount: String) {
-        atm.value = atm.value.copy(balance = atm.value.balance - amount.validate())
+        state.value =
+            state.value.copy(state.value.atm.copy(state.value.atm.balance - amount.validate()))
     }
 }
 
@@ -50,16 +59,16 @@ data class ATM(
 )
 
 @Composable
-private fun App() {
-    val atm by Store.atm.collectAsState()
+private fun App(store: Store) {
+    val state by store.state.collectAsState()
     var amount by remember { mutableStateOf("") }
 
     val deposit = {
-        Store.deposit(amount)
+        store.deposit(amount)
         amount = ""
     }
     val withdraw = {
-        Store.withdraw(amount)
+        store.withdraw(amount)
         amount = ""
     }
 
@@ -67,7 +76,7 @@ private fun App() {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text = atm.balance.toString())
+        Text(text = state.atm.balance.toString())
 
         TextField(
             value = amount,
