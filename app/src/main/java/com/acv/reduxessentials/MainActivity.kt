@@ -19,6 +19,11 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.text.isDigitsOnly
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.NavController
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.acv.reduxessentials.Action.*
 import com.acv.reduxessentials.ui.theme.ReduxEssentialsTheme
 import kotlinx.coroutines.CoroutineScope
@@ -52,13 +57,37 @@ fun createStore(
             }
         }
 
-    return object : Store() {
+    return object : Store {
         override var dispatch: (Action) -> Unit = dispatcher
         override val state: StateFlow<AppState> = currentState
     }
 }
 
+
+class ComposeNavigator(
+    private var navController: NavController? = null,
+) : Navigator {
+    override fun goTo(screen: Screen) {
+        when (screen) {
+            Screen.Atm -> navController?.navigate("atm")
+            Screen.Transaction -> navController?.navigate("transaction")
+        }
+    }
+
+    @Composable
+    fun create(navHostController: NavHostController, store: Store) {
+        navController = navHostController
+
+        NavHost(navController = navHostController, startDestination = "atm") {
+            composable("atm") { Atm(store) }
+            composable("transaction") { Atm(store) }
+        }
+    }
+}
+
 class MainActivity : ComponentActivity() {
+    private val navigator: ComposeNavigator = ComposeNavigator()
+
     private val store = createStore(
         initialState = AppState(
             atm = ATM(0),
@@ -66,7 +95,7 @@ class MainActivity : ComponentActivity() {
             loading = false,
             transactions = emptyList()
         ),
-        sideEffects = listOf(ASYNC, TRACKER),
+        sideEffects = listOf(ASYNC, TRACKER, Navigation(navigator)),
         reducers = listOf(AtmReducer, TransactionReducer),
         coroutineScope = lifecycleScope
     )
@@ -79,7 +108,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colors.background
                 ) {
-                    App(store)
+                    App(navigator, store)
                 }
             }
         }
@@ -115,14 +144,14 @@ sealed interface Action {
     data class WithdrawalSucceed(val amount: Int) : Action
     object WithdrawalError : Action
     data class RemoveTransaction(val id: Long) : Action
+    data class EditTransaction(val id: Long) : Action
 }
 
 typealias SideEffect = suspend (Action, (Action) -> Unit, AppState) -> Unit
 
-abstract class Store(
-) {
-    abstract val state: StateFlow<AppState>
-    abstract var dispatch: (Action) -> Unit
+interface Store {
+    val state: StateFlow<AppState>
+    var dispatch: (Action) -> Unit
 }
 
 val ASYNC: SideEffect = { action, dispatch, state ->
@@ -142,6 +171,22 @@ val ASYNC: SideEffect = { action, dispatch, state ->
     dispatch(action)
 }
 
+interface Navigator {
+    fun goTo(screen: Screen)
+}
+
+sealed interface Screen {
+    object Atm : Screen
+    object Transaction : Screen
+}
+
+fun Navigation(navigator: Navigator): SideEffect = { action, dispatch, state ->
+    Log.e("nav", action.toString())
+    when (action) {
+        is EditTransaction -> navigator.goTo(Screen.Transaction)
+    }
+    dispatch(action)
+}
 
 typealias Reducer = (Action, AppState) -> AppState
 
@@ -221,7 +266,12 @@ suspend fun validateTransaction(amount: String): Int? {
 }
 
 @Composable
-private fun App(store: Store) {
+private fun App(navigator: ComposeNavigator, store: Store) {
+    navigator.create(navHostController = rememberNavController(), store = store)
+}
+
+@Composable
+private fun Atm(store: Store) {
     val state by store.state.collectAsState()
     var amount by remember { mutableStateOf("") }
 
@@ -236,6 +286,10 @@ private fun App(store: Store) {
     }
 
     val remove = { id: Long ->
+        store.dispatch(RemoveTransaction(id))
+    }
+
+    val edit = { id: Long ->
         store.dispatch(RemoveTransaction(id))
     }
 
@@ -285,6 +339,9 @@ private fun App(store: Store) {
                         )
                         Button(onClick = { remove(it.id) }) {
                             Text(text = "Remove")
+                        }
+                        Button(onClick = { edit(it.id) }) {
+                            Text(text = "Edit")
                         }
                     }
                 }
