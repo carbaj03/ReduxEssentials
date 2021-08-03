@@ -70,7 +70,7 @@ class ComposeNavigator(
     override fun goTo(screen: Screen) {
         when (screen) {
             Screen.Atm -> navController?.navigate("atm")
-            Screen.Transaction -> navController?.navigate("transaction")
+            is Screen.Transaction -> navController?.navigate("transaction/${screen.id}")
         }
     }
 
@@ -78,9 +78,16 @@ class ComposeNavigator(
     fun create(navHostController: NavHostController, store: Store) {
         navController = navHostController
 
-        NavHost(navController = navHostController, startDestination = "atm") {
-            composable("atm") { Atm(store) }
-            composable("transaction") { Atm(store) }
+        NavHost(
+            navController = navHostController,
+            startDestination = Screen.Atm.route
+        ) {
+            composable(Screen.Atm.route) { Atm(store) }
+            composable(Screen.Transaction.route) {
+                it.arguments?.getString("id")?.toLongOrNull()?.let {
+                    Transaction(store = store, it)
+                }
+            }
         }
     }
 }
@@ -105,8 +112,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             ReduxEssentialsTheme {
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colors.background
+                    color = MaterialTheme.colors.background,
                 ) {
                     App(navigator, store)
                 }
@@ -119,8 +125,11 @@ data class AppState(
     val atm: ATM,
     val transactions: List<Transaction>,
     val error: Boolean,
-    val loading: Boolean,
-)
+    val loading: Boolean
+) {
+    fun getTransaction(id: Long): Transaction? =
+        transactions.firstOrNull { it.id == id }
+}
 
 data class Transaction(
     val id: Long,
@@ -145,6 +154,7 @@ sealed interface Action {
     object WithdrawalError : Action
     data class RemoveTransaction(val id: Long) : Action
     data class EditTransaction(val id: Long) : Action
+    data class ModifiedTransaction(val id: Long, val description: String) : Action
 }
 
 typealias SideEffect = suspend (Action, (Action) -> Unit, AppState) -> Unit
@@ -175,15 +185,20 @@ interface Navigator {
     fun goTo(screen: Screen)
 }
 
-sealed interface Screen {
-    object Atm : Screen
-    object Transaction : Screen
+sealed class Screen {
+    object Atm : Screen()
+    data class Transaction(val id: Long) : Screen() {
+        companion object
+    }
 }
+
+val Screen.Atm.route get() = "atm"
+val Screen.Transaction.Companion.route get() = "transaction/{id}"
 
 fun Navigation(navigator: Navigator): SideEffect = { action, dispatch, state ->
     Log.e("nav", action.toString())
     when (action) {
-        is EditTransaction -> navigator.goTo(Screen.Transaction)
+        is EditTransaction -> navigator.goTo(Screen.Transaction(action.id))
     }
     dispatch(action)
 }
@@ -202,6 +217,11 @@ val TransactionReducer: Reducer = { action, state ->
                 } ?: state.atm.balance),
             transactions = state.transactions.filterNot { it.id == action.id },
         )
+        is ModifiedTransaction -> state.copy(
+            transactions = state.transactions.map {
+                if (it.id == action.id) it.copy(description = action.description)
+                else it
+            })
         else -> state
     }
 }
@@ -271,6 +291,34 @@ private fun App(navigator: ComposeNavigator, store: Store) {
 }
 
 @Composable
+private fun Transaction(store: Store, id: Long) {
+    val state by store.state.collectAsState()
+
+    val transaction: Transaction? = state.getTransaction(id)
+
+    var description by remember { mutableStateOf(transaction?.description.toString()) }
+
+    val modifiedTransaction = { id: Long, description: String ->
+        store.dispatch(ModifiedTransaction(id, description))
+    }
+
+    transaction?.let {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(text = transaction.amount.toString())
+            TextField(value = description, onValueChange = { description = it })
+            Button(onClick = { modifiedTransaction(transaction.id, description) }) {
+                Text(text = "Change")
+            }
+        }
+    } ?: Text(text = "Error")
+
+}
+
+@Composable
 private fun Atm(store: Store) {
     val state by store.state.collectAsState()
     var amount by remember { mutableStateOf("") }
@@ -290,10 +338,11 @@ private fun Atm(store: Store) {
     }
 
     val edit = { id: Long ->
-        store.dispatch(RemoveTransaction(id))
+        store.dispatch(EditTransaction(id))
     }
 
     Column(
+        Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -330,22 +379,42 @@ private fun Atm(store: Store) {
 
                 LazyColumn {
                     items(state.transactions) {
-                        Text(
-                            text = it.amount.toString(),
-                            color = when (it.type) {
-                                is Type.Income -> Green
-                                is Type.Expense -> Red
-                            }
+                        TransactionItem(
+                            onRemove = remove,
+                            onEdit = edit,
+                            transaction = it
                         )
-                        Button(onClick = { remove(it.id) }) {
-                            Text(text = "Remove")
-                        }
-                        Button(onClick = { edit(it.id) }) {
-                            Text(text = "Edit")
-                        }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TransactionItem(
+    onRemove: (Long) -> Unit,
+    onEdit: (Long) -> Unit,
+    transaction: Transaction
+) {
+    val color = when (transaction.type) {
+        is Type.Income -> Green
+        is Type.Expense -> Red
+    }
+    Row {
+        Text(
+            text = transaction.amount.toString(),
+            color = color,
+        )
+        Text(
+            text = "(${transaction.description})",
+            color = color
+        )
+        Button(onClick = { onRemove(transaction.id) }) {
+            Text(text = "Remove")
+        }
+        Button(onClick = { onEdit(transaction.id) }) {
+            Text(text = "Edit")
         }
     }
 }
